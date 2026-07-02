@@ -49,7 +49,7 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
 .upload-progress{font-size:0.68rem;color:var(--gray);margin-top:4px}
 /* VARIANTS */
 .variants-list{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
-.variant-row{display:grid;grid-template-columns:1fr 1fr 1fr auto auto;gap:6px;align-items:center}
+.variant-row{display:grid;grid-template-columns:1fr 1fr 1fr 1.3fr auto auto;gap:6px;align-items:center}
 .variant-row input{padding:6px 8px;border:1.5px solid var(--border);font-family:Montserrat,sans-serif;font-size:0.72rem;background:var(--off);outline:none}
 .variant-row input:focus{border-color:var(--red)}
 .variant-row select{padding:6px 8px;border:1.5px solid var(--border);font-family:Montserrat,sans-serif;font-size:0.72rem;background:var(--off);cursor:pointer;outline:none}
@@ -89,9 +89,16 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
 .stat-label{font-size:0.62rem;color:var(--gray);font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-top:0.3rem}
 .empty-table{text-align:center;padding:3rem;color:var(--gray);font-size:0.8rem}
 .hint{font-size:0.65rem;color:var(--gray);margin-top:4px;font-style:italic}
-.search-row{display:flex;gap:10px;margin-bottom:1rem}
-.search-row input{flex:1;padding:0.75rem 0.9rem;border:1.5px solid var(--border);font-family:Montserrat,sans-serif;font-size:0.8rem;outline:none;background:#fff}
+.search-row{display:flex;gap:10px;margin-bottom:1rem;flex-wrap:wrap}
+.search-row input{flex:1;min-width:220px;padding:0.75rem 0.9rem;border:1.5px solid var(--border);font-family:Montserrat,sans-serif;font-size:0.8rem;outline:none;background:#fff}
 .search-row input:focus{border-color:var(--red)}
+.btn-editmode{background:#fff;border:1.5px solid var(--border);color:var(--black);font-family:Montserrat,sans-serif;font-size:0.65rem;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;padding:0 16px;cursor:pointer;white-space:nowrap}
+.btn-editmode.on{background:var(--black);color:#fff;border-color:var(--black)}
+.bulk-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:#FFF8E1;border:1.5px solid #F2D67E;padding:10px 14px;margin-bottom:1rem}
+.bulk-bar .count{font-size:0.72rem;font-weight:800;letter-spacing:0.05em;color:#92400E;text-transform:uppercase}
+.btn-bulkdel{background:var(--red);color:#fff;border:none;font-family:Montserrat,sans-serif;font-size:0.65rem;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;padding:8px 14px;cursor:pointer}
+.btn-clearsel{background:none;border:1.5px solid var(--border);color:var(--black);font-family:Montserrat,sans-serif;font-size:0.65rem;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;padding:8px 14px;cursor:pointer}
+.products-table td.chk-cell{width:34px;text-align:center}
 /* ADD FROM URL TAB */
 .server-status{display:flex;align-items:center;gap:8px;font-size:0.7rem;font-weight:700;color:var(--gray);margin-bottom:1.2rem}
 .dot{width:9px;height:9px;border-radius:50%;background:#e53935;flex-shrink:0}
@@ -204,9 +211,10 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
         <!-- VARIANTS -->
         <div class="card">
           <h3>Size &amp; Colour Variants</h3>
-          <p class="hint" style="margin-bottom:1rem">Add different sizes, colours or models with individual prices.</p>
+          <p class="hint" style="margin-bottom:1rem">Add different sizes, colours or models. Leave "Link to product" empty for a simple price change on this same page (e.g. wattage). Fill it with another product's ID to make the button jump to that product's own page instead (use this when size/colour changes the photo too).</p>
           <button class="btn-add-variant" id="add-variant-btn">+ Add Variant</button>
           <div class="variants-list" id="variants-list"></div>
+          <datalist id="product-picklist"></datalist>
         </div>
       </div>
     </div>
@@ -268,6 +276,14 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
   <div class="tab-panel" id="tab-list">
     <div class="search-row">
       <input type="text" id="product-search" placeholder="Search by name, brand or category...">
+      <button class="btn-editmode" id="edit-mode-btn">Edit mode: OFF</button>
+    </div>
+    <div class="bulk-bar" id="bulk-bar" style="display:none">
+      <span class="count" id="bulk-count">0 selected</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn-clearsel" id="bulk-clear-btn">Clear selection</button>
+        <button class="btn-bulkdel" id="bulk-del-btn">Delete selected</button>
+      </div>
     </div>
     <div class="card" style="padding:0;overflow:hidden">
       <div id="products-list" style="overflow-x:auto"><div class="empty-table">Loading...</div></div>
@@ -283,6 +299,8 @@ var pendingPhotos = []; // {file, previewUrl, uploaded_url} for new uploads OR {
 var variantCount = 0;
 var editingProductId = null; // null = add mode, else editing this product id
 var allProducts = []; // cache for search filtering
+var listEditMode = false;
+var selectedProductIds = {};
 var scrapedData = null; // last scraped product payload
 
 /* ── AUTH ── */
@@ -592,6 +610,10 @@ function addVariantRow(existing) {
   var prI = document.createElement("input");
   prI.className="vprice"; prI.type="text"; prI.placeholder="e.g. Price";
   if (existing) prI.value = existing.price || "";
+  var linkI = document.createElement("input");
+  linkI.className="vlink"; linkI.type="text"; linkI.placeholder="Link to product ID (optional)";
+  linkI.setAttribute("list","product-picklist");
+  if (existing) linkI.value = existing.linked_product_id || "";
   var lbl = document.createElement("label");
   lbl.className="toggle"; lbl.style.flexShrink="0";
   var chk = document.createElement("input");
@@ -601,9 +623,23 @@ function addVariantRow(existing) {
   var delBtn=document.createElement("button");
   delBtn.className="btn-del-variant"; delBtn.textContent="x";
   (function(id){ delBtn.addEventListener("click",function(){ removeVariant(id); }); })(rowId);
-  row.appendChild(sel); row.appendChild(valI); row.appendChild(prI);
+  row.appendChild(sel); row.appendChild(valI); row.appendChild(prI); row.appendChild(linkI);
   row.appendChild(lbl); row.appendChild(delBtn);
   list.appendChild(row);
+}
+
+/* Fills the <datalist> used by each variant row's "link to product" field
+   so admins can pick an existing product instead of typing its raw ID. */
+function refreshProductPicklist() {
+  var dl = document.getElementById("product-picklist");
+  if (!dl) return;
+  dl.innerHTML = "";
+  allProducts.forEach(function(p) {
+    var opt = document.createElement("option");
+    opt.value = p.id;
+    opt.label = (p.Name || "") + " — " + (p.Brand || "") + (p.Price ? " (₹" + p.Price + ")" : "");
+    dl.appendChild(opt);
+  });
 }
 
 function removeVariant(id) { var el = document.getElementById(id); if(el) el.remove(); }
@@ -616,7 +652,8 @@ function getVariants() {
     var value = row.querySelector(".vvalue").value.trim();
     var price = row.querySelector(".vprice").value.trim();
     var stock = row.querySelector(".vstock").checked;
-    if (value) variants.push({ variant_type: type, variant_value: value, price: price, in_stock: stock });
+    var linkId = row.querySelector(".vlink").value.trim();
+    if (value) variants.push({ variant_type: type, variant_value: value, price: price, in_stock: stock, linked_product_id: linkId || null });
   });
   return variants;
 }
@@ -710,7 +747,7 @@ async function saveProduct() {
     var variants = getVariants();
     if (variants.length > 0) {
       var varRecords = variants.map(function(v) {
-        return { product_id: pid, variant_type: v.variant_type, variant_value: v.variant_value, price: v.price, in_stock: v.in_stock };
+        return { product_id: pid, variant_type: v.variant_type, variant_value: v.variant_value, price: v.price, in_stock: v.in_stock, linked_product_id: v.linked_product_id };
       });
       await fetch(SURL + "/rest/v1/product_variants", {
         method: "POST",
@@ -811,20 +848,97 @@ async function loadProducts() {
   });
   allProducts = await res.json();
   renderProductsTable(allProducts);
+  refreshProductPicklist();
 }
 
 function renderProductsTable(data) {
   var list = document.getElementById("products-list");
   if (!data.length) { list.innerHTML = "<div class='empty-table'>No products found.</div>"; return; }
-  var html = "<table class='products-table'><thead><tr><th>Photo</th><th>Name</th><th>Brand</th><th>Category</th><th>Price</th><th>Stock</th><th></th></tr></thead><tbody>";
+  var checkTh = listEditMode ? "<th class='chk-cell'><input type='checkbox' id='select-all-chk'></th>" : "";
+  var html = "<table class='products-table'><thead><tr>" + checkTh + "<th>Photo</th><th>Name</th><th>Brand</th><th>Category</th><th>Price</th><th>Stock</th><th></th></tr></thead><tbody>";
   data.forEach(function(p) {
     var photo = p.Photo_url ? "<img class='prod-photo' src='" + p.Photo_url + "' alt=''>" : "<div class='prod-photo-ph'>&#128247;</div>";
     var stock = p.in_stock ? "<span class='stock-badge stock-yes'>In Stock</span>" : "<span class='stock-badge stock-no'>Out</span>";
-    html += "<tr><td>" + photo + "</td><td><strong>" + (p.Name||"") + "</strong><br><span style='color:#999;font-size:0.65rem'>" + (p.Spec||"").substring(0,50) + "</span></td><td>" + (p.Brand||"") + "</td><td style='font-size:0.65rem'>" + (p.Category||"") + "</td><td style='font-size:0.72rem;font-weight:700'>" + (p.Price||"-") + "</td><td>" + stock + "</td><td><button class='btn-edit' onclick='editProduct(" + p.id + ")'>Edit</button><button class='btn-del' onclick='deleteProduct(" + p.id + ")'>Delete</button></td></tr>";
+    var chkCell = listEditMode ? "<td class='chk-cell'><input type='checkbox' class='row-chk' data-id='" + p.id + "'" + (selectedProductIds[p.id] ? " checked" : "") + "></td>" : "";
+    var actions = listEditMode ? "<button class='btn-edit' onclick='editProduct(" + p.id + ")'>Edit</button><button class='btn-del' onclick='deleteProduct(" + p.id + ")'>Delete</button>" : "";
+    html += "<tr>" + chkCell + "<td>" + photo + "</td><td><strong>" + (p.Name||"") + "</strong><br><span style='color:#999;font-size:0.65rem'>" + (p.Spec||"").substring(0,50) + "</span></td><td>" + (p.Brand||"") + "</td><td style='font-size:0.65rem'>" + (p.Category||"") + "</td><td style='font-size:0.72rem;font-weight:700'>" + (p.Price||"-") + "</td><td>" + stock + "</td><td>" + actions + "</td></tr>";
   });
   html += "</tbody></table>";
   list.innerHTML = html;
+
+  if (listEditMode) {
+    var selectAll = document.getElementById("select-all-chk");
+    var visibleIds = data.map(function(p){ return p.id; });
+    if (selectAll) {
+      selectAll.checked = visibleIds.length > 0 && visibleIds.every(function(id){ return selectedProductIds[id]; });
+      selectAll.addEventListener("change", function() {
+        visibleIds.forEach(function(id) {
+          if (selectAll.checked) selectedProductIds[id] = true; else delete selectedProductIds[id];
+        });
+        updateBulkBar();
+        renderProductsTable(data);
+      });
+    }
+    document.querySelectorAll(".row-chk").forEach(function(chk) {
+      chk.addEventListener("change", function() {
+        var id = chk.dataset.id;
+        // ids may be numeric or uuid — match against the actual key type in allProducts
+        var match = allProducts.find(function(p){ return String(p.id) === String(id); });
+        var key = match ? match.id : id;
+        if (chk.checked) selectedProductIds[key] = true; else delete selectedProductIds[key];
+        updateBulkBar();
+      });
+    });
+  }
+  updateBulkBar();
 }
+
+function updateBulkBar() {
+  var ids = Object.keys(selectedProductIds).filter(function(k){ return selectedProductIds[k]; });
+  var bar = document.getElementById("bulk-bar");
+  if (!bar) return;
+  if (listEditMode && ids.length > 0) {
+    bar.style.display = "flex";
+    document.getElementById("bulk-count").textContent = ids.length + " selected";
+  } else {
+    bar.style.display = "none";
+  }
+}
+
+document.getElementById("edit-mode-btn").addEventListener("click", function() {
+  listEditMode = !listEditMode;
+  this.textContent = "Edit mode: " + (listEditMode ? "ON" : "OFF");
+  this.classList.toggle("on", listEditMode);
+  if (!listEditMode) selectedProductIds = {};
+  renderProductsTable(allProducts.length && document.getElementById("product-search").value.trim() ?
+    allProducts.filter(function(p){
+      var q = document.getElementById("product-search").value.trim().toLowerCase();
+      return (p.Name||"").toLowerCase().indexOf(q)!==-1 || (p.Brand||"").toLowerCase().indexOf(q)!==-1 || (p.Category||"").toLowerCase().indexOf(q)!==-1;
+    }) : allProducts);
+});
+
+document.getElementById("bulk-clear-btn").addEventListener("click", function() {
+  selectedProductIds = {};
+  renderProductsTable(allProducts);
+});
+
+document.getElementById("bulk-del-btn").addEventListener("click", async function() {
+  var ids = Object.keys(selectedProductIds).filter(function(k){ return selectedProductIds[k]; });
+  if (!ids.length) return;
+  if (!confirm("Delete " + ids.length + " product(s) — and all their photos and variants? This cannot be undone.")) return;
+  var btn = this;
+  btn.disabled = true; btn.textContent = "Deleting...";
+  for (var i = 0; i < ids.length; i++) {
+    var id = ids[i];
+    await fetch(SURL + "/rest/v1/product_images?product_id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
+    await fetch(SURL + "/rest/v1/product_variants?product_id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
+    await fetch(SURL + "/rest/v1/products?id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
+    if (editingProductId === id) { exitEditMode(); resetForm(); }
+  }
+  selectedProductIds = {};
+  btn.disabled = false; btn.textContent = "Delete selected";
+  await loadProducts(); loadStats();
+});
 
 document.getElementById("product-search").addEventListener("input", function() {
   var q = this.value.trim().toLowerCase();
