@@ -762,6 +762,7 @@ async function saveProduct() {
     exitEditMode();
     resetForm();
     loadStats();
+    loadProducts();
 
   } catch(e) {
     showMsg("save-msg","error","Error: " + e.message);
@@ -950,7 +951,7 @@ document.getElementById("bulk-del-btn").addEventListener("click", async function
     await fetch(SURL + "/rest/v1/product_images?product_id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
     await fetch(SURL + "/rest/v1/product_variants?product_id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
     await fetch(SURL + "/rest/v1/products?id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
-    if (editingProductId === id) { exitEditMode(); resetForm(); }
+    if (String(editingProductId) === String(id)) { exitEditMode(); resetForm(); }
   }
   selectedProductIds = {};
   btn.disabled = false; btn.textContent = "Delete selected";
