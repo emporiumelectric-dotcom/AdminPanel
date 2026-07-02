@@ -81,7 +81,8 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
 .btn-del:hover{background:#ffebee}
 .btn-edit{background:none;border:1px solid #c5cae9;color:#3949ab;font-family:Montserrat,sans-serif;font-size:0.6rem;font-weight:700;padding:4px 10px;cursor:pointer;text-transform:uppercase;letter-spacing:0.08em;margin-right:6px}
 .btn-edit:hover{background:#e8eaf6}
-.stock-badge{display:inline-block;font-size:0.58rem;font-weight:800;padding:2px 8px;letter-spacing:0.08em;text-transform:uppercase}
+.stock-badge{display:inline-block;font-size:0.58rem;font-weight:800;padding:2px 8px;letter-spacing:0.08em;text-transform:uppercase;cursor:pointer;border:1px solid transparent;transition:opacity .12s}
+.stock-badge:hover{opacity:.75}
 .stock-yes{background:#e8f5e9;color:#2e7d32}.stock-no{background:#ffebee;color:#c62828}
 .stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:2rem}
 .stat-card{background:var(--white);border:1px solid var(--border);padding:1.2rem 1.5rem}
@@ -851,6 +852,22 @@ async function loadProducts() {
   refreshProductPicklist();
 }
 
+async function toggleStock(id, current) {
+  var newVal = !current;
+  await fetch(SURL + "/rest/v1/products?id=eq." + id, {
+    method: "PATCH",
+    headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN, "Content-Type": "application/json" },
+    body: JSON.stringify({ in_stock: newVal })
+  });
+  var p = allProducts.find(function(x){ return String(x.id) === String(id); });
+  if (p) p.in_stock = newVal;
+  var q = document.getElementById("product-search").value.trim().toLowerCase();
+  renderProductsTable(q ? allProducts.filter(function(x){
+    return (x.Name||"").toLowerCase().indexOf(q)!==-1 || (x.Brand||"").toLowerCase().indexOf(q)!==-1 || (x.Category||"").toLowerCase().indexOf(q)!==-1;
+  }) : allProducts);
+  loadStats();
+}
+
 function renderProductsTable(data) {
   var list = document.getElementById("products-list");
   if (!data.length) { list.innerHTML = "<div class='empty-table'>No products found.</div>"; return; }
@@ -858,7 +875,7 @@ function renderProductsTable(data) {
   var html = "<table class='products-table'><thead><tr>" + checkTh + "<th>Photo</th><th>Name</th><th>Brand</th><th>Category</th><th>Price</th><th>Stock</th><th></th></tr></thead><tbody>";
   data.forEach(function(p) {
     var photo = p.Photo_url ? "<img class='prod-photo' src='" + p.Photo_url + "' alt=''>" : "<div class='prod-photo-ph'>&#128247;</div>";
-    var stock = p.in_stock ? "<span class='stock-badge stock-yes'>In Stock</span>" : "<span class='stock-badge stock-no'>Out</span>";
+    var stock = "<span class='stock-badge " + (p.in_stock ? "stock-yes" : "stock-no") + "' onclick='toggleStock(\"" + p.id + "\"," + !!p.in_stock + ")' title='Click to toggle'>" + (p.in_stock ? "In Stock" : "Out") + "</span>";
     var chkCell = listEditMode ? "<td class='chk-cell'><input type='checkbox' class='row-chk' data-id='" + p.id + "'" + (selectedProductIds[p.id] ? " checked" : "") + "></td>" : "";
     var actions = listEditMode ? "<button class='btn-edit' onclick='editProduct(" + p.id + ")'>Edit</button><button class='btn-del' onclick='deleteProduct(" + p.id + ")'>Delete</button>" : "";
     html += "<tr>" + chkCell + "<td>" + photo + "</td><td><strong>" + (p.Name||"") + "</strong><br><span style='color:#999;font-size:0.65rem'>" + (p.Spec||"").substring(0,50) + "</span></td><td>" + (p.Brand||"") + "</td><td style='font-size:0.65rem'>" + (p.Category||"") + "</td><td style='font-size:0.72rem;font-weight:700'>" + (p.Price||"-") + "</td><td>" + stock + "</td><td>" + actions + "</td></tr>";
