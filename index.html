@@ -295,7 +295,32 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
 <script>
 var SURL = "https://dnmzzckeuctnkqbphwdg.supabase.co";
 var SKEY = "sb_publishable_TkuJuy1AF1wixYRIPCh2WA_U8A-Pxn3";
+var FN_URL = SURL + "/functions/v1/admin-products";
 var SCRAPE_URL = "http://localhost:7842";
+
+// All product/image/variant writes go through the admin-products Edge Function,
+// which verifies the session and the specific admin user id before touching
+// anything with the service_role key. Direct PostgREST writes with SKEY no
+// longer work -- RLS only allows service_role to write these tables.
+async function callFn(payload) {
+  var res = await fetch(FN_URL, {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + AUTH_TOKEN, "apikey": SKEY, "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  var data = await res.json();
+  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+function fileToBase64(file) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function() { resolve(reader.result.split(",")[1]); };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 var pendingPhotos = []; // {file, previewUrl, uploaded_url} for new uploads OR {existingId, previewUrl, keep:true} for existing photos in edit mode
 var variantCount = 0;
 var editingProductId = null; // null = add mode, else editing this product id
@@ -461,22 +486,12 @@ document.getElementById("save-scraped-btn").addEventListener("click", async func
   var btn = document.getElementById("save-scraped-btn");
   btn.disabled = true; btn.textContent = "Saving...";
   try {
-    var res = await fetch(SURL + "/rest/v1/products", {
-      method: "POST",
-      headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN, "Content-Type": "application/json", "Prefer": "return=representation" },
-      body: JSON.stringify({ Name: name, Brand: brand, Category: cat, Spec: spec, Price: price, Photo_url: images[0] || "", in_stock: true })
-    });
-    if (!res.ok) throw new Error(await res.text());
-    var saved = await res.json();
-    var pid = saved[0].id;
+    var saved = await callFn({ action: "insertProduct", product: { Name: name, Brand: brand, Category: cat, Spec: spec, Price: price, Photo_url: images[0] || "", in_stock: true } });
+    var pid = saved.product.id;
 
     if (images.length) {
       var imgRecords = images.map(function(u, idx) { return { product_id: pid, image_url: u, sort_order: idx }; });
-      await fetch(SURL + "/rest/v1/product_images", {
-        method: "POST",
-        headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN, "Content-Type": "application/json" },
-        body: JSON.stringify(imgRecords)
-      });
+      await callFn({ action: "insertImages", records: imgRecords });
     }
 
     showMsg("pu-msg","success","\u2713 " + name + " saved with " + images.length + " image(s)! (id=" + pid + ")");
@@ -515,22 +530,12 @@ document.getElementById("bulk-fetch-btn").addEventListener("click", async functi
       var data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || "scrape failed");
 
-      var pres = await fetch(SURL + "/rest/v1/products", {
-        method: "POST",
-        headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN, "Content-Type": "application/json", "Prefer": "return=representation" },
-        body: JSON.stringify({ Name: data.name, Brand: data.brand, Category: data.category, Spec: data.spec, Price: data.price, Photo_url: (data.images||[])[0] || "", in_stock: true })
-      });
-      if (!pres.ok) throw new Error(await pres.text());
-      var saved = await pres.json();
-      var pid = saved[0].id;
+      var saved = await callFn({ action: "insertProduct", product: { Name: data.name, Brand: data.brand, Category: data.category, Spec: data.spec, Price: data.price, Photo_url: (data.images||[])[0] || "", in_stock: true } });
+      var pid = saved.product.id;
 
       if (data.images && data.images.length) {
         var imgRecords = data.images.map(function(u, idx) { return { product_id: pid, image_url: u, sort_order: idx }; });
-        await fetch(SURL + "/rest/v1/product_images", {
-          method: "POST",
-          headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN, "Content-Type": "application/json" },
-          body: JSON.stringify(imgRecords)
-        });
+        await callFn({ action: "insertImages", records: imgRecords });
       }
       log.textContent += "  \u2713 Saved: " + data.name + " (" + (data.images||[]).length + " images)\n";
       okCount++;
@@ -580,13 +585,9 @@ function renderPhotosGrid() {
 async function uploadPhoto(file) {
   var ext = file.name.split(".").pop();
   var filename = Date.now() + "_" + Math.random().toString(36).substr(2,6) + "." + ext;
-  var res = await fetch(SURL + "/storage/v1/object/product-photos/" + filename, {
-    method: "POST",
-    headers: { "Authorization": "Bearer " + AUTH_TOKEN, "apikey": SKEY, "Content-Type": file.type, "x-upsert": "true" },
-    body: file
-  });
-  if (!res.ok) throw new Error("Photo upload failed: " + res.status);
-  return SURL + "/storage/v1/object/public/product-photos/" + filename;
+  var dataBase64 = await fileToBase64(file);
+  var data = await callFn({ action: "uploadImage", path: filename, contentType: file.type || "image/jpeg", dataBase64: dataBase64 });
+  return data.url;
 }
 
 /* ── VARIANTS ── */
@@ -680,36 +681,19 @@ async function saveProduct() {
 
     if (editingProductId) {
       pid = editingProductId;
-      var res = await fetch(SURL + "/rest/v1/products?id=eq." + pid, {
-        method: "PATCH",
-        headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN, "Content-Type": "application/json" },
-        body: JSON.stringify({ Name: name, Brand: brand, Category: cat, Spec: spec, Price: price, in_stock: stock })
-      });
-      if (!res.ok) throw new Error(await res.text());
+      await callFn({ action: "updateProduct", id: pid, product: { Name: name, Brand: brand, Category: cat, Spec: spec, Price: price, in_stock: stock } });
 
       // Remove photos the user deleted from the existing set
       var currentIds = pendingPhotos.filter(function(p){ return p.existingId; }).map(function(p){ return p.existingId; });
       var origIds = window._editOrigPhotoIds || [];
       for (var oi = 0; oi < origIds.length; oi++) {
         if (currentIds.indexOf(origIds[oi]) === -1) {
-          await fetch(SURL + "/rest/v1/product_images?id=eq." + origIds[oi], {
-            method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN }
-          });
+          await callFn({ action: "deleteImage", id: origIds[oi] });
         }
       }
-      // Replace all variants with current form state (simplest consistent approach)
-      await fetch(SURL + "/rest/v1/product_variants?product_id=eq." + pid, {
-        method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN }
-      });
     } else {
-      var res2 = await fetch(SURL + "/rest/v1/products", {
-        method: "POST",
-        headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN, "Content-Type": "application/json", "Prefer": "return=representation" },
-        body: JSON.stringify({ Name: name, Brand: brand, Category: cat, Spec: spec, Price: price, Photo_url: "", in_stock: stock })
-      });
-      if (!res2.ok) throw new Error(await res2.text());
-      var saved = await res2.json();
-      pid = saved[0].id;
+      var saved = await callFn({ action: "insertProduct", product: { Name: name, Brand: brand, Category: cat, Spec: spec, Price: price, Photo_url: "", in_stock: stock } });
+      pid = saved.product.id;
     }
 
     // Upload any newly added photo files
@@ -729,33 +713,19 @@ async function saveProduct() {
       var photoRecords = uploadedUrls.map(function(url, idx) {
         return { product_id: pid, image_url: url, sort_order: startOrder + idx };
       });
-      await fetch(SURL + "/rest/v1/product_images", {
-        method: "POST",
-        headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN, "Content-Type": "application/json" },
-        body: JSON.stringify(photoRecords)
-      });
+      await callFn({ action: "insertImages", records: photoRecords });
     }
 
     var mainPhoto = keptExistingUrls[0] || uploadedUrls[0];
     if (mainPhoto) {
-      await fetch(SURL + "/rest/v1/products?id=eq." + pid, {
-        method: "PATCH",
-        headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN, "Content-Type": "application/json" },
-        body: JSON.stringify({ Photo_url: mainPhoto })
-      });
+      await callFn({ action: "updateProduct", id: pid, product: { Photo_url: mainPhoto } });
     }
 
     var variants = getVariants();
-    if (variants.length > 0) {
-      var varRecords = variants.map(function(v) {
-        return { product_id: pid, variant_type: v.variant_type, variant_value: v.variant_value, price: v.price, in_stock: v.in_stock, linked_product_id: v.linked_product_id };
-      });
-      await fetch(SURL + "/rest/v1/product_variants", {
-        method: "POST",
-        headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN, "Content-Type": "application/json" },
-        body: JSON.stringify(varRecords)
-      });
-    }
+    var varRecords = variants.map(function(v) {
+      return { variant_type: v.variant_type, variant_value: v.variant_value, price: v.price, in_stock: v.in_stock, linked_product_id: v.linked_product_id };
+    });
+    await callFn({ action: "replaceVariants", product_id: pid, variants: varRecords });
 
     progress.textContent = "";
     showMsg("save-msg","success", editingProductId ? "Product updated!" : "Product saved with " + uploadedUrls.length + " photo(s) and " + variants.length + " variant(s)!");
@@ -855,11 +825,7 @@ async function loadProducts() {
 
 async function toggleStock(id, current) {
   var newVal = !current;
-  await fetch(SURL + "/rest/v1/products?id=eq." + id, {
-    method: "PATCH",
-    headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN, "Content-Type": "application/json" },
-    body: JSON.stringify({ in_stock: newVal })
-  });
+  await callFn({ action: "updateProduct", id: id, product: { in_stock: newVal } });
   var p = allProducts.find(function(x){ return String(x.id) === String(id); });
   if (p) p.in_stock = newVal;
   var q = document.getElementById("product-search").value.trim().toLowerCase();
@@ -946,13 +912,8 @@ document.getElementById("bulk-del-btn").addEventListener("click", async function
   if (!confirm("Delete " + ids.length + " product(s) — and all their photos and variants? This cannot be undone.")) return;
   var btn = this;
   btn.disabled = true; btn.textContent = "Deleting...";
-  for (var i = 0; i < ids.length; i++) {
-    var id = ids[i];
-    await fetch(SURL + "/rest/v1/product_images?product_id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
-    await fetch(SURL + "/rest/v1/product_variants?product_id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
-    await fetch(SURL + "/rest/v1/products?id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
-    if (String(editingProductId) === String(id)) { exitEditMode(); resetForm(); }
-  }
+  await callFn({ action: "deleteProducts", ids: ids });
+  if (ids.some(function(id){ return String(editingProductId) === String(id); })) { exitEditMode(); resetForm(); }
   selectedProductIds = {};
   btn.disabled = false; btn.textContent = "Delete selected";
   await loadProducts(); loadStats();
@@ -983,9 +944,7 @@ async function loadStats() {
 
 async function deleteProduct(id) {
   if (!confirm("Delete this product and all its photos and variants?")) return;
-  await fetch(SURL + "/rest/v1/product_images?product_id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
-  await fetch(SURL + "/rest/v1/product_variants?product_id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
-  await fetch(SURL + "/rest/v1/products?id=eq." + id, { method: "DELETE", headers: { "apikey": SKEY, "Authorization": "Bearer " + AUTH_TOKEN } });
+  await callFn({ action: "deleteProduct", id: id });
   if (editingProductId === id) { exitEditMode(); resetForm(); }
   loadProducts(); loadStats();
 }
