@@ -177,14 +177,8 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
           </select>
         </div>
         <div class="field"><label>Category *</label>
-          <select id="f-cat">
-            <option value="">Select category...</option>
-            <option>Fans</option><option>Lights and LEDs</option>
-            <option>Fancy and Outdoor Lamps</option><option>Wires and Cables</option>
-            <option>Switches and Sockets</option><option>Switchgear and Industrial</option>
-            <option>Modular and Pipes</option><option>ACs and Freezers</option>
-            <option>Geysers</option><option>Appliances</option>
-          </select>
+          <select id="f-cat"></select>
+          <input type="text" id="f-cat-other" class="cat-other-input" placeholder="Enter new category name" style="display:none;margin-top:0.5rem">
         </div>
         <div class="field"><label>Spec / Description</label><textarea id="f-spec" placeholder="e.g. 1200mm BLDC motor, IoT enabled, remote control, 5 star rated"></textarea></div>
         <div class="field"><label>Base Price (optional)</label><input type="text" id="f-price" placeholder="e.g. &#x20B9;6,999 or Call for price"></div>
@@ -251,7 +245,10 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
           <h3 style="border:none;margin-bottom:0.8rem">Preview &mdash; edit before saving</h3>
           <div class="field"><label>Name</label><input type="text" id="p-name"></div>
           <div class="field"><label>Brand</label><input type="text" id="p-brand"></div>
-          <div class="field"><label>Category</label><input type="text" id="p-cat"></div>
+          <div class="field"><label>Category</label>
+            <select id="p-cat"></select>
+            <input type="text" id="p-cat-other" class="cat-other-input" placeholder="Enter new category name" style="display:none;margin-top:0.5rem">
+          </div>
           <div class="field"><label>Spec / Description</label><textarea id="p-spec"></textarea></div>
           <div class="field"><label>Price</label><input type="text" id="p-price"></div>
           <label style="font-size:0.65rem;font-weight:800;letter-spacing:0.15em;text-transform:uppercase;color:var(--gray);display:block;margin-bottom:0.4rem">Images (click to exclude)</label>
@@ -297,6 +294,79 @@ var SURL = "https://dnmzzckeuctnkqbphwdg.supabase.co";
 var SKEY = "sb_publishable_TkuJuy1AF1wixYRIPCh2WA_U8A-Pxn3";
 var FN_URL = SURL + "/functions/v1/admin-products";
 var SCRAPE_URL = "http://localhost:7842";
+
+// Single source of truth for category options, shared by the Add Product
+// dropdown and the Add-from-URL preview dropdown, so the two can never drift
+// apart the way the old free-text "Add from URL" field could (that's how
+// "APPLIANCES" vs "Appliances" ended up as two separate categories on the
+// live site -- nothing stopped a typo or case variant from being saved).
+var CATEGORIES = ["Fans","Lights and LEDs","Fancy and Outdoor Lamps","Wires and Cables",
+  "Switches and Sockets","Switchgear and Industrial","Modular and Pipes",
+  "ACs and Freezers","Geysers","Appliances"];
+var CAT_OTHER = "__other__";
+
+function populateCategorySelect(sel) {
+  sel.innerHTML = "";
+  var blank = document.createElement("option");
+  blank.value = ""; blank.textContent = "Select category...";
+  sel.appendChild(blank);
+  CATEGORIES.forEach(function(c) {
+    var o = document.createElement("option");
+    o.textContent = c;
+    sel.appendChild(o);
+  });
+  var other = document.createElement("option");
+  other.value = CAT_OTHER; other.textContent = "+ Add new category...";
+  sel.appendChild(other);
+}
+
+// Wires a category <select> to the text input that appears when "+ Add new
+// category..." is picked, and returns a getter for the effective value.
+function wireCategoryField(selId, otherId) {
+  var sel = document.getElementById(selId), other = document.getElementById(otherId);
+  sel.addEventListener("change", function() {
+    if (sel.value === CAT_OTHER) { other.style.display = "block"; other.focus(); }
+    else { other.style.display = "none"; other.value = ""; }
+  });
+}
+
+function getCategoryValue(selId, otherId) {
+  var sel = document.getElementById(selId);
+  if (sel.value === CAT_OTHER) return document.getElementById(otherId).value.trim();
+  return sel.value;
+}
+
+// Sets a category select to match an existing value (from a saved product or
+// a scrape result). If it's not one of the known categories, falls back to
+// "+ Add new category..." with the real value preloaded, instead of silently
+// leaving the dropdown blank and losing the category.
+function setCategoryValue(selId, otherId, value) {
+  var sel = document.getElementById(selId), other = document.getElementById(otherId);
+  value = value || "";
+  sel.value = value;
+  if (sel.value !== value) {
+    sel.value = CAT_OTHER;
+    other.value = value;
+    other.style.display = "block";
+  } else {
+    other.style.display = "none";
+    other.value = "";
+  }
+}
+
+// Snaps a scraped category guess onto the canonical casing when it matches
+// one we know (case-insensitive), otherwise passes it through unchanged.
+// Used on the bulk-import path, which has no dropdown/review step at all.
+function normalizeCategory(raw) {
+  raw = (raw || "").trim();
+  var match = CATEGORIES.find(function(c) { return c.toLowerCase() === raw.toLowerCase(); });
+  return match || raw;
+}
+
+populateCategorySelect(document.getElementById("f-cat"));
+populateCategorySelect(document.getElementById("p-cat"));
+wireCategoryField("f-cat", "f-cat-other");
+wireCategoryField("p-cat", "p-cat-other");
 
 // All product/image/variant writes go through the admin-products Edge Function,
 // which verifies the session and the specific admin user id before touching
@@ -439,7 +509,7 @@ document.getElementById("fetch-btn").addEventListener("click", async function() 
     excludedImages = {};
     document.getElementById("p-name").value = data.name || "";
     document.getElementById("p-brand").value = data.brand || "";
-    document.getElementById("p-cat").value = data.category || "";
+    setCategoryValue("p-cat", "p-cat-other", data.category || "");
     document.getElementById("p-spec").value = data.spec || "";
     document.getElementById("p-price").value = data.price || "";
     renderPreviewImages(data.images || []);
@@ -476,7 +546,7 @@ document.getElementById("save-scraped-btn").addEventListener("click", async func
   if (!scrapedData) return;
   var name = document.getElementById("p-name").value.trim();
   var brand = document.getElementById("p-brand").value.trim();
-  var cat = document.getElementById("p-cat").value.trim();
+  var cat = getCategoryValue("p-cat", "p-cat-other");
   var spec = document.getElementById("p-spec").value.trim();
   var price = document.getElementById("p-price").value.trim();
   if (!name || !brand || !cat) { showMsg("pu-msg","error","Name, Brand and Category are required."); return; }
@@ -530,7 +600,7 @@ document.getElementById("bulk-fetch-btn").addEventListener("click", async functi
       var data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || "scrape failed");
 
-      var saved = await callFn({ action: "insertProduct", product: { Name: data.name, Brand: data.brand, Category: data.category, Spec: data.spec, Price: data.price, Photo_url: (data.images||[])[0] || "", in_stock: true } });
+      var saved = await callFn({ action: "insertProduct", product: { Name: data.name, Brand: data.brand, Category: normalizeCategory(data.category), Spec: data.spec, Price: data.price, Photo_url: (data.images||[])[0] || "", in_stock: true } });
       var pid = saved.product.id;
 
       if (data.images && data.images.length) {
@@ -664,7 +734,7 @@ function getVariants() {
 async function saveProduct() {
   var name  = document.getElementById("f-name").value.trim();
   var brand = document.getElementById("f-brand").value;
-  var cat   = document.getElementById("f-cat").value;
+  var cat   = getCategoryValue("f-cat", "f-cat-other");
   var spec  = document.getElementById("f-spec").value.trim();
   var price = document.getElementById("f-price").value.trim();
   var stock = document.getElementById("f-stock").checked;
@@ -743,7 +813,7 @@ async function saveProduct() {
 function resetForm() {
   ["f-name","f-spec","f-price"].forEach(function(id){ document.getElementById(id).value=""; });
   document.getElementById("f-brand").value = "";
-  document.getElementById("f-cat").value = "";
+  setCategoryValue("f-cat", "f-cat-other", "");
   document.getElementById("f-stock").checked = true;
   document.getElementById("photo-input").value = "";
   document.getElementById("variants-list").innerHTML = "";
@@ -776,7 +846,7 @@ async function editProduct(id) {
 
   document.getElementById("f-name").value = p.Name || "";
   document.getElementById("f-brand").value = p.Brand || "";
-  document.getElementById("f-cat").value = p.Category || "";
+  setCategoryValue("f-cat", "f-cat-other", p.Category || "");
   document.getElementById("f-spec").value = p.Spec || "";
   document.getElementById("f-price").value = p.Price || "";
   document.getElementById("f-stock").checked = !!p.in_stock;
