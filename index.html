@@ -118,6 +118,12 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
 .preview-img-thumb .x-mark{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(227,6,19,0.6);color:#fff;font-size:1.8rem;font-weight:900}
 .preview-img-thumb.excluded .x-mark{display:flex}
 .bulk-log{background:#111;color:#0f0;font-family:monospace;font-size:0.7rem;padding:1rem;height:220px;overflow-y:auto;margin-top:1rem;white-space:pre-wrap}
+.bulk-review-header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:0.5rem}
+.bulk-item{margin-bottom:1.2rem}
+.bulk-item-head{display:flex;align-items:center;gap:10px;margin-bottom:1rem;padding-bottom:0.8rem;border-bottom:1px solid var(--border)}
+.bulk-item-num{background:var(--black);color:#fff;font-size:0.65rem;font-weight:900;padding:3px 8px;flex-shrink:0}
+.bulk-item-url{font-size:0.68rem;color:var(--gray);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.field-label-inline{display:block;font-size:0.65rem;font-weight:800;letter-spacing:0.15em;text-transform:uppercase;color:var(--gray);margin-bottom:0.5rem}
 </style>
 </head>
 <body>
@@ -264,8 +270,17 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
       <div class="card">
         <h3>Bulk Add from Links</h3>
         <div class="field"><label>Product URLs (one per line)</label><textarea id="bulk-urls" style="height:140px" placeholder="https://...&#10;https://...&#10;https://..."></textarea></div>
-        <button class="btn-fetch" id="bulk-fetch-btn">Fetch &amp; Save All</button>
+        <button class="btn-fetch" id="bulk-fetch-btn">Fetch for Review</button>
         <div class="bulk-log" id="bulk-log" style="display:none"></div>
+      </div>
+
+      <div id="bulk-review" style="display:none;margin-top:1.5rem">
+        <div class="bulk-review-header">
+          <h3 style="border:none;margin-bottom:0">Review Before Saving</h3>
+          <button class="btn-fetch" id="bulk-save-all-btn">Save All Remaining</button>
+        </div>
+        <p class="hint" style="margin:0.3rem 0 1rem">Fix anything the scraper got wrong, then save each one or use "Save All Remaining." Nothing here is in the database yet.</p>
+        <div id="bulk-review-list"></div>
       </div>
     </div>
   </div>
@@ -367,6 +382,16 @@ populateCategorySelect(document.getElementById("f-cat"));
 populateCategorySelect(document.getElementById("p-cat"));
 wireCategoryField("f-cat", "f-cat-other");
 wireCategoryField("p-cat", "p-cat-other");
+
+// The bulk-review cards below are built from scraped page content (product
+// titles/descriptions pulled from whatever site the admin pastes in), so it
+// goes through innerHTML as untrusted text -- escape it rather than trusting
+// the source site not to have a stray "<" in a title.
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function(c) {
+    return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c];
+  });
+}
 
 // All product/image/variant writes go through the admin-products Edge Function,
 // which verifies the session and the specific admin user id before touching
@@ -575,7 +600,13 @@ document.getElementById("save-scraped-btn").addEventListener("click", async func
   btn.disabled = false; btn.textContent = "Save Product to Database";
 });
 
-/* ── ADD FROM URL: bulk fetch ── */
+/* ── ADD FROM URL: bulk fetch, then review each one before it touches the database ──
+   This used to scrape and save in the same step with no way to catch a bad
+   name/category/photo before it was live. Now "Fetch for Review" only
+   scrapes; nothing is saved until the admin approves (or edits) each card,
+   the same way the single-URL flow already works. */
+var bulkItems = []; // { url, data, excludedImages, done }
+
 document.getElementById("bulk-fetch-btn").addEventListener("click", async function() {
   var raw = document.getElementById("bulk-urls").value.trim();
   if (!raw) return;
@@ -584,10 +615,11 @@ document.getElementById("bulk-fetch-btn").addEventListener("click", async functi
 
   var log = document.getElementById("bulk-log");
   log.style.display = "block";
-  log.textContent = "Starting bulk fetch of " + urls.length + " URL(s)...\n";
+  log.textContent = "Fetching " + urls.length + " URL(s) for review...\n";
   var btn = document.getElementById("bulk-fetch-btn");
-  btn.disabled = true; btn.textContent = "Working...";
+  btn.disabled = true; btn.textContent = "Fetching...";
 
+  bulkItems = [];
   var okCount = 0, failCount = 0;
   for (var i = 0; i < urls.length; i++) {
     var url = urls[i];
@@ -599,15 +631,9 @@ document.getElementById("bulk-fetch-btn").addEventListener("click", async functi
       });
       var data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || "scrape failed");
-
-      var saved = await callFn({ action: "insertProduct", product: { Name: data.name, Brand: data.brand, Category: normalizeCategory(data.category), Spec: data.spec, Price: data.price, Photo_url: (data.images||[])[0] || "", in_stock: true } });
-      var pid = saved.product.id;
-
-      if (data.images && data.images.length) {
-        var imgRecords = data.images.map(function(u, idx) { return { product_id: pid, image_url: u, sort_order: idx }; });
-        await callFn({ action: "insertImages", records: imgRecords });
-      }
-      log.textContent += "  \u2713 Saved: " + data.name + " (" + (data.images||[]).length + " images)\n";
+      data.category = normalizeCategory(data.category);
+      bulkItems.push({ url: url, data: data, excludedImages: {}, done: false });
+      log.textContent += "  \u2713 Fetched: " + data.name + "\n";
       okCount++;
     } catch(e) {
       log.textContent += "  \u2717 Failed: " + e.message + "\n";
@@ -615,9 +641,121 @@ document.getElementById("bulk-fetch-btn").addEventListener("click", async functi
     }
     log.scrollTop = log.scrollHeight;
   }
-  log.textContent += "\nDone. " + okCount + " saved, " + failCount + " failed.\n";
-  btn.disabled = false; btn.textContent = "Fetch & Save All";
-  loadStats();
+  log.textContent += "\nFetched " + okCount + ", failed " + failCount + ". Review below before saving.\n";
+  btn.disabled = false; btn.textContent = "Fetch for Review";
+
+  renderBulkReview();
+});
+
+function renderBulkReview() {
+  var wrap = document.getElementById("bulk-review");
+  var list = document.getElementById("bulk-review-list");
+  list.innerHTML = "";
+  var pending = bulkItems.filter(function(x){ return !x.done; });
+  if (!pending.length) { wrap.style.display = "none"; return; }
+  wrap.style.display = "block";
+
+  bulkItems.forEach(function(item, i) {
+    if (item.done) return;
+    var div = document.createElement("div");
+    div.className = "card bulk-item";
+    div.id = "bulk-item-" + i;
+    div.innerHTML =
+      '<div class="bulk-item-head"><span class="bulk-item-num">#' + (i+1) + '</span>' +
+      '<span class="bulk-item-url">' + escHtml(item.url) + '</span></div>' +
+      '<div class="field"><label>Name</label><input type="text" id="bulk-' + i + '-name" value="' + escHtml(item.data.name) + '"></div>' +
+      '<div class="field"><label>Brand</label><input type="text" id="bulk-' + i + '-brand" value="' + escHtml(item.data.brand) + '"></div>' +
+      '<div class="field"><label>Category</label><select id="bulk-' + i + '-cat"></select>' +
+        '<input type="text" id="bulk-' + i + '-cat-other" class="cat-other-input" style="display:none;margin-top:0.5rem" placeholder="Enter new category name"></div>' +
+      '<div class="field"><label>Spec / Description</label><textarea id="bulk-' + i + '-spec">' + escHtml(item.data.spec) + '</textarea></div>' +
+      '<div class="field"><label>Price</label><input type="text" id="bulk-' + i + '-price" value="' + escHtml(item.data.price) + '"></div>' +
+      '<label class="field-label-inline">Images (click to exclude)</label>' +
+      '<div class="preview-imgs" id="bulk-' + i + '-imgs"></div>' +
+      '<div style="display:flex;gap:8px;margin-top:0.8rem">' +
+      '<button class="btn-save" id="bulk-' + i + '-save-btn" style="flex:1">Save This Product</button>' +
+      '<button class="btn-cancel-edit" id="bulk-' + i + '-skip-btn" style="display:block;width:auto;padding:0 1.2rem;margin-top:0">Skip</button>' +
+      '</div><div class="msg" id="bulk-' + i + '-msg"></div>';
+    list.appendChild(div);
+
+    populateCategorySelect(document.getElementById("bulk-" + i + "-cat"));
+    setCategoryValue("bulk-" + i + "-cat", "bulk-" + i + "-cat-other", item.data.category || "");
+    wireCategoryField("bulk-" + i + "-cat", "bulk-" + i + "-cat-other");
+
+    renderBulkItemImages(i);
+
+    document.getElementById("bulk-" + i + "-save-btn").addEventListener("click", function(){ saveBulkItem(i); });
+    document.getElementById("bulk-" + i + "-skip-btn").addEventListener("click", function(){ skipBulkItem(i); });
+  });
+}
+
+function renderBulkItemImages(i) {
+  var grid = document.getElementById("bulk-" + i + "-imgs");
+  var item = bulkItems[i];
+  grid.innerHTML = "";
+  (item.data.images || []).forEach(function(url, idx) {
+    var thumb = document.createElement("div");
+    thumb.className = "preview-img-thumb";
+    var img = document.createElement("img");
+    img.src = url;
+    var mark = document.createElement("div");
+    mark.className = "x-mark";
+    mark.textContent = "\u2715";
+    thumb.appendChild(img);
+    thumb.appendChild(mark);
+    thumb.addEventListener("click", function() {
+      thumb.classList.toggle("excluded");
+      item.excludedImages[idx] = thumb.classList.contains("excluded");
+    });
+    grid.appendChild(thumb);
+  });
+}
+
+async function saveBulkItem(i) {
+  var item = bulkItems[i];
+  if (!item || item.done) return;
+  var name = document.getElementById("bulk-" + i + "-name").value.trim();
+  var brand = document.getElementById("bulk-" + i + "-brand").value.trim();
+  var cat = getCategoryValue("bulk-" + i + "-cat", "bulk-" + i + "-cat-other");
+  var spec = document.getElementById("bulk-" + i + "-spec").value.trim();
+  var price = document.getElementById("bulk-" + i + "-price").value.trim();
+  if (!name || !brand || !cat) { showMsg("bulk-" + i + "-msg", "error", "Name, Brand and Category are required."); return; }
+
+  var images = (item.data.images || []).filter(function(u, idx) { return !item.excludedImages[idx]; });
+
+  var btn = document.getElementById("bulk-" + i + "-save-btn");
+  btn.disabled = true; btn.textContent = "Saving...";
+  try {
+    var saved = await callFn({ action: "insertProduct", product: { Name: name, Brand: brand, Category: cat, Spec: spec, Price: price, Photo_url: images[0] || "", in_stock: true } });
+    var pid = saved.product.id;
+    if (images.length) {
+      var imgRecords = images.map(function(u, idx) { return { product_id: pid, image_url: u, sort_order: idx }; });
+      await callFn({ action: "insertImages", records: imgRecords });
+    }
+    item.done = true;
+    var div = document.getElementById("bulk-item-" + i);
+    if (div) div.remove();
+    loadStats();
+    if (!bulkItems.some(function(x){ return !x.done; })) document.getElementById("bulk-review").style.display = "none";
+  } catch(e) {
+    showMsg("bulk-" + i + "-msg", "error", "Save failed: " + e.message);
+    btn.disabled = false; btn.textContent = "Save This Product";
+  }
+}
+
+function skipBulkItem(i) {
+  bulkItems[i].done = true;
+  var div = document.getElementById("bulk-item-" + i);
+  if (div) div.remove();
+  if (!bulkItems.some(function(x){ return !x.done; })) document.getElementById("bulk-review").style.display = "none";
+}
+
+document.getElementById("bulk-save-all-btn").addEventListener("click", async function() {
+  var btn = this;
+  btn.disabled = true; btn.textContent = "Saving all...";
+  for (var i = 0; i < bulkItems.length; i++) {
+    if (!bulkItems[i].done) await saveBulkItem(i);
+  }
+  btn.disabled = false; btn.textContent = "Save All Remaining";
 });
 
 /* ── PHOTOS (Add Product tab) ── */
