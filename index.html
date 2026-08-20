@@ -308,13 +308,17 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
 var SURL = "https://dnmzzckeuctnkqbphwdg.supabase.co";
 var SKEY = "sb_publishable_TkuJuy1AF1wixYRIPCh2WA_U8A-Pxn3";
 var FN_URL = SURL + "/functions/v1/admin-products";
-// NON-FUNCTIONAL as of 2026-08-20: no server has ever been found listening
-// on localhost:7842 anywhere on the shop PC or in any project checked. The
-// UI below is kept deliberately (the review-before-save flow is worth
-// reusing) but the Fetch buttons stay disabled until checkServer() actually
-// confirms something is listening here -- see docs/PROJECT_CHECKLIST.md
-// (Storefront/deployed-apps section) for the decision record. EE Lens,
-// found separately, may end up serving this instead of a local scrape_server.py.
+// SUPERSEDED as of 2026-08-20 -- decision recorded, not just suspected.
+// No server has ever been found listening on localhost:7842 anywhere on
+// the shop PC or in any project checked; scrape_server.py doesn't exist.
+// EE Lens's PC Catalogue Manager (github.com/emporiumelectric-dotcom/EE-Lens,
+// pc-catalogue-manager/import-url.js) already implements this feature
+// properly -- more fields captured, SSRF-guarded, never executes fetched-
+// page code -- and is the future path if this is ever revived. Not
+// reviving localhost:7842. The UI below is kept deliberately (the
+// review-before-save flow is worth reusing as a shell) but the Fetch
+// buttons stay disabled until checkServer() confirms something real is
+// listening. See docs/PROJECT_CHECKLIST.md §7.8 and §10 for the record.
 var SCRAPE_URL = "http://localhost:7842";
 
 // Single source of truth for category options, shared by the Add Product
