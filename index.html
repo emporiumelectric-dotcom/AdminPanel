@@ -244,7 +244,7 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
       <div class="card">
         <h3>Fetch Product from Link</h3>
         <div class="field"><label>Product URL</label><input type="text" id="scrape-url" placeholder="Paste product page link here"></div>
-        <button class="btn-fetch" id="fetch-btn">Fetch Product</button>
+        <button class="btn-fetch" id="fetch-btn" disabled>Fetch Product</button>
         <div class="msg" id="fetch-msg"></div>
 
         <div class="preview-card" id="preview-card">
@@ -270,7 +270,7 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
       <div class="card">
         <h3>Bulk Add from Links</h3>
         <div class="field"><label>Product URLs (one per line)</label><textarea id="bulk-urls" style="height:140px" placeholder="https://...&#10;https://...&#10;https://..."></textarea></div>
-        <button class="btn-fetch" id="bulk-fetch-btn">Fetch for Review</button>
+        <button class="btn-fetch" id="bulk-fetch-btn" disabled>Fetch for Review</button>
         <div class="bulk-log" id="bulk-log" style="display:none"></div>
       </div>
 
@@ -308,6 +308,13 @@ nav{background:var(--black);padding:0 2rem;height:60px;display:flex;align-items:
 var SURL = "https://dnmzzckeuctnkqbphwdg.supabase.co";
 var SKEY = "sb_publishable_TkuJuy1AF1wixYRIPCh2WA_U8A-Pxn3";
 var FN_URL = SURL + "/functions/v1/admin-products";
+// NON-FUNCTIONAL as of 2026-08-20: no server has ever been found listening
+// on localhost:7842 anywhere on the shop PC or in any project checked. The
+// UI below is kept deliberately (the review-before-save flow is worth
+// reusing) but the Fetch buttons stay disabled until checkServer() actually
+// confirms something is listening here -- see docs/PROJECT_CHECKLIST.md
+// (Storefront/deployed-apps section) for the decision record. EE Lens,
+// found separately, may end up serving this instead of a local scrape_server.py.
 var SCRAPE_URL = "http://localhost:7842";
 
 // Single source of truth for category options, shared by the Add Product
@@ -483,20 +490,29 @@ document.getElementById("tab-btn-add").addEventListener("click", function(){ swi
 document.getElementById("tab-btn-url").addEventListener("click", function(){ switchTab("url"); });
 document.getElementById("tab-btn-list").addEventListener("click", function(){ switchTab("list"); });
 
-/* ── ADD FROM URL: server check ── */
+/* ── ADD FROM URL: server check ──
+   Fetch buttons default to disabled (see the `disabled` attribute in the
+   HTML) and only re-enable here, on a real confirmed health check -- never
+   assume the server is there. */
 async function checkServer() {
   var dot = document.getElementById("server-dot");
   var txt = document.getElementById("server-status-text");
+  var fetchBtn = document.getElementById("fetch-btn");
+  var bulkBtn = document.getElementById("bulk-fetch-btn");
   try {
     var res = await fetch(SCRAPE_URL + "/health", { method: "GET" });
     if (res.ok) {
       dot.classList.add("ok");
       txt.textContent = "Scrape server connected (localhost:7842)";
+      fetchBtn.disabled = false;
+      bulkBtn.disabled = false;
       return;
     }
   } catch(e) {}
   dot.classList.remove("ok");
-  txt.textContent = "Scrape server not running. Start it with: python scrape_server.py";
+  txt.textContent = "Not available: no scrape server is running on localhost:7842, and none is currently set up on this machine. Fetch is disabled until that's fixed -- don't paste URLs expecting this to work.";
+  fetchBtn.disabled = true;
+  bulkBtn.disabled = true;
 }
 
 /* ── ADD FROM URL: mode switch ── */
